@@ -9,11 +9,17 @@
 (define-constant ERR-INVALID-DESCRIPTION (err u108))
 (define-constant ERR-VOTING-PERIOD-TOO-SHORT (err u109))
 (define-constant ERR-CANNOT-VOTE-OWN-SCRIPT (err u110))
+(define-constant ERR-INVALID-RATING (err u111))
+(define-constant ERR-COMMENT-TOO-LONG (err u112))
+(define-constant ERR-ALREADY-RATED (err u113))
 
 (define-constant MIN-VOTING-PERIOD u144)
 (define-constant MAX-TITLE-LENGTH u100)
 (define-constant MAX-DESCRIPTION-LENGTH u500)
 (define-constant VOTING-FEE u1000000)
+(define-constant MIN-RATING u1)
+(define-constant MAX-RATING u5)
+(define-constant MAX-COMMENT-LENGTH u200)
 
 (define-data-var contract-owner principal tx-sender)
 (define-data-var next-script-id uint u1)
@@ -45,6 +51,24 @@
 (define-map ScriptVoters
     { script-id: uint, voter: principal }
     { timestamp: uint }
+)
+
+(define-map ScriptRatings
+    { script-id: uint, rater: principal }
+    {
+        rating: uint,
+        comment: (string-ascii 200),
+        rated-at: uint
+    }
+)
+
+(define-map ScriptRatingStats
+    { script-id: uint }
+    {
+        total-ratings: uint,
+        rating-sum: uint,
+        average-rating: uint
+    }
 )
 
 (define-public (submit-script (title (string-ascii 100)) (description (string-ascii 500)) (voting-duration uint))
@@ -129,6 +153,50 @@
         )
         
         (print { event: "voting-closed", script-id: script-id, final-votes: (get votes script) })
+        (ok true)
+    )
+)
+
+(define-public (rate-and-comment (script-id uint) (rating uint) (comment (string-ascii 200)))
+    (let
+        (
+            (script (unwrap! (map-get? Scripts { script-id: script-id }) ERR-SCRIPT-NOT-FOUND))
+            (current-block burn-block-height)
+            (rater-key { script-id: script-id, rater: tx-sender })
+            (stats-key { script-id: script-id })
+            (existing-stats (default-to { total-ratings: u0, rating-sum: u0, average-rating: u0 } 
+                           (map-get? ScriptRatingStats stats-key)))
+        )
+        (asserts! (>= rating MIN-RATING) ERR-INVALID-RATING)
+        (asserts! (<= rating MAX-RATING) ERR-INVALID-RATING)
+        (asserts! (<= (len comment) MAX-COMMENT-LENGTH) ERR-COMMENT-TOO-LONG)
+        (asserts! (not (is-eq tx-sender (get author script))) ERR-CANNOT-VOTE-OWN-SCRIPT)
+        (asserts! (is-none (map-get? ScriptRatings rater-key)) ERR-ALREADY-RATED)
+        
+        (map-set ScriptRatings rater-key
+            {
+                rating: rating,
+                comment: comment,
+                rated-at: current-block
+            }
+        )
+        
+        (let
+            (
+                (new-total (+ (get total-ratings existing-stats) u1))
+                (new-sum (+ (get rating-sum existing-stats) rating))
+                (new-average (/ new-sum new-total))
+            )
+            (map-set ScriptRatingStats stats-key
+                {
+                    total-ratings: new-total,
+                    rating-sum: new-sum,
+                    average-rating: new-average
+                }
+            )
+        )
+        
+        (print { event: "script-rated", script-id: script-id, rater: tx-sender, rating: rating })
         (ok true)
     )
 )
@@ -237,6 +305,25 @@
             ))
         )
         ERR-SCRIPT-NOT-FOUND
+    )
+)
+
+(define-read-only (get-script-rating (script-id uint) (rater principal))
+    (map-get? ScriptRatings { script-id: script-id, rater: rater })
+)
+
+(define-read-only (get-script-rating-stats (script-id uint))
+    (map-get? ScriptRatingStats { script-id: script-id })
+)
+
+(define-read-only (has-user-rated (user principal) (script-id uint))
+    (is-some (map-get? ScriptRatings { script-id: script-id, rater: user }))
+)
+
+(define-read-only (get-script-average-rating (script-id uint))
+    (match (map-get? ScriptRatingStats { script-id: script-id })
+        stats (ok (get average-rating stats))
+        (ok u0)
     )
 )
 
