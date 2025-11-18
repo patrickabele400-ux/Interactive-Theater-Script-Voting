@@ -24,6 +24,8 @@
 (define-data-var contract-owner principal tx-sender)
 (define-data-var next-script-id uint u1)
 (define-data-var total-scripts uint u0)
+(define-data-var voting-fee-setting uint VOTING-FEE)
+(define-data-var min-voting-period-setting uint MIN-VOTING-PERIOD)
 
 (define-map Scripts
     { script-id: uint }
@@ -76,15 +78,17 @@
         (
             (script-id (var-get next-script-id))
             (current-block burn-block-height)
+            (current-voting-fee (var-get voting-fee-setting))
+            (current-min-voting-period (var-get min-voting-period-setting))
             (voting-end-block (+ current-block voting-duration))
         )
         (asserts! (> (len title) u0) ERR-INVALID-TITLE)
         (asserts! (<= (len title) MAX-TITLE-LENGTH) ERR-INVALID-TITLE)
         (asserts! (> (len description) u0) ERR-INVALID-DESCRIPTION)
         (asserts! (<= (len description) MAX-DESCRIPTION-LENGTH) ERR-INVALID-DESCRIPTION)
-        (asserts! (>= voting-duration MIN-VOTING-PERIOD) ERR-VOTING-PERIOD-TOO-SHORT)
+        (asserts! (>= voting-duration current-min-voting-period) ERR-VOTING-PERIOD-TOO-SHORT)
         
-        (try! (stx-transfer? VOTING-FEE tx-sender (var-get contract-owner)))
+        (try! (stx-transfer? current-voting-fee tx-sender (var-get contract-owner)))
         
         (map-set Scripts
             { script-id: script-id }
@@ -230,6 +234,17 @@
     )
 )
 
+(define-public (update-voting-config (new-fee uint) (new-min-period uint))
+    (begin
+        (asserts! (is-eq tx-sender (var-get contract-owner)) ERR-NOT-AUTHORIZED)
+        (asserts! (>= new-min-period MIN-VOTING-PERIOD) ERR-VOTING-PERIOD-TOO-SHORT)
+        (var-set voting-fee-setting new-fee)
+        (var-set min-voting-period-setting new-min-period)
+        (print { event: "voting-config-updated", voting-fee: new-fee, min-voting-period: new-min-period })
+        (ok true)
+    )
+)
+
 (define-read-only (get-script-details (script-id uint))
     (map-get? Scripts { script-id: script-id })
 )
@@ -280,8 +295,8 @@
         next-script-id: (var-get next-script-id),
         contract-owner: (var-get contract-owner),
         current-block: burn-block-height,
-        voting-fee: VOTING-FEE,
-        min-voting-period: MIN-VOTING-PERIOD
+        voting-fee: (var-get voting-fee-setting),
+        min-voting-period: (var-get min-voting-period-setting)
     })
 )
 
