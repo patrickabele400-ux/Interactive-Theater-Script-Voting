@@ -12,6 +12,8 @@
 (define-constant ERR-INVALID-RATING (err u111))
 (define-constant ERR-COMMENT-TOO-LONG (err u112))
 (define-constant ERR-ALREADY-RATED (err u113))
+(define-constant ERR-NOT-BOOKMARKED (err u114))
+(define-constant ERR-ALREADY-BOOKMARKED (err u115))
 
 (define-constant MIN-VOTING-PERIOD u144)
 (define-constant MAX-TITLE-LENGTH u100)
@@ -71,6 +73,21 @@
         rating-sum: uint,
         average-rating: uint
     }
+)
+
+(define-map UserBookmarks
+    { user: principal, script-id: uint }
+    { bookmarked-at: uint }
+)
+
+(define-map UserBookmarkCounts
+    { user: principal }
+    { count: uint }
+)
+
+(define-map ScriptBookmarkCounts
+    { script-id: uint }
+    { count: uint }
 )
 
 (define-public (submit-script (title (string-ascii 100)) (description (string-ascii 500)) (voting-duration uint))
@@ -340,5 +357,70 @@
         stats (ok (get average-rating stats))
         (ok u0)
     )
+)
+
+(define-public (bookmark-script (script-id uint))
+    (let
+        (
+            (script (unwrap! (map-get? Scripts { script-id: script-id }) ERR-SCRIPT-NOT-FOUND))
+            (current-block burn-block-height)
+            (bookmark-key { user: tx-sender, script-id: script-id })
+            (user-count-key { user: tx-sender })
+            (script-count-key { script-id: script-id })
+            (existing-user-count (default-to { count: u0 } (map-get? UserBookmarkCounts user-count-key)))
+            (existing-script-count (default-to { count: u0 } (map-get? ScriptBookmarkCounts script-count-key)))
+        )
+        (asserts! (is-none (map-get? UserBookmarks bookmark-key)) ERR-ALREADY-BOOKMARKED)
+        
+        (map-set UserBookmarks bookmark-key { bookmarked-at: current-block })
+        (map-set UserBookmarkCounts user-count-key { count: (+ (get count existing-user-count) u1) })
+        (map-set ScriptBookmarkCounts script-count-key { count: (+ (get count existing-script-count) u1) })
+        
+        (print { event: "script-bookmarked", script-id: script-id, user: tx-sender })
+        (ok true)
+    )
+)
+
+(define-public (remove-bookmark (script-id uint))
+    (let
+        (
+            (bookmark-key { user: tx-sender, script-id: script-id })
+            (user-count-key { user: tx-sender })
+            (script-count-key { script-id: script-id })
+            (existing-bookmark (unwrap! (map-get? UserBookmarks bookmark-key) ERR-NOT-BOOKMARKED))
+            (existing-user-count (default-to { count: u0 } (map-get? UserBookmarkCounts user-count-key)))
+            (existing-script-count (default-to { count: u0 } (map-get? ScriptBookmarkCounts script-count-key)))
+        )
+        (map-delete UserBookmarks bookmark-key)
+        (map-set UserBookmarkCounts user-count-key 
+            { count: (if (> (get count existing-user-count) u0) (- (get count existing-user-count) u1) u0) })
+        (map-set ScriptBookmarkCounts script-count-key 
+            { count: (if (> (get count existing-script-count) u0) (- (get count existing-script-count) u1) u0) })
+        
+        (print { event: "bookmark-removed", script-id: script-id, user: tx-sender })
+        (ok true)
+    )
+)
+
+(define-read-only (is-script-bookmarked (user principal) (script-id uint))
+    (is-some (map-get? UserBookmarks { user: user, script-id: script-id }))
+)
+
+(define-read-only (get-user-bookmark-count (user principal))
+    (match (map-get? UserBookmarkCounts { user: user })
+        data (get count data)
+        u0
+    )
+)
+
+(define-read-only (get-script-bookmark-count (script-id uint))
+    (match (map-get? ScriptBookmarkCounts { script-id: script-id })
+        data (get count data)
+        u0
+    )
+)
+
+(define-read-only (get-bookmark-details (user principal) (script-id uint))
+    (map-get? UserBookmarks { user: user, script-id: script-id })
 )
 
